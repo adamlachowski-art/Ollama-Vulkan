@@ -42,7 +42,9 @@ jobs:
           done
 
       - name: Fetch and merge upstream
+        id: merge
         run: |
+          echo "changed=false" >> "$GITHUB_OUTPUT"
           git remote add upstream https://github.com/ollama/ollama.git
           git fetch upstream main
           git checkout -B sync/upstream origin/main
@@ -51,15 +53,18 @@ jobs:
             exit 0
           fi
           git merge --no-edit upstream/main
-          # This repo rewrites README.md as its own project page; keep that version.
-          git checkout sync/upstream -- README.md
+          # This repo rewrites README.md as its own project page; keep the version from main before the merge.
+          git checkout origin/main -- README.md
           git add README.md
           git commit --amend --no-edit
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Push sync branch
+        if: steps.merge.outputs.changed == 'true'
         run: git push --force-with-lease origin sync/upstream
 
       - name: Open or update pull request
+        if: steps.merge.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -70,6 +75,7 @@ jobs:
             || true
 
       - name: Enable auto-merge on the PR
+        if: steps.merge.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
