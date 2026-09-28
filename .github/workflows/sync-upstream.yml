@@ -4,6 +4,10 @@ name: sync-upstream
 # Creates/updates a `sync/upstream` branch, opens a pull request back to main,
 # and (if auto-merge is enabled) merges it once the Windows build passes.
 #
+# Fork note: GitHub Actions must first be enabled in the fork's Actions tab.
+# The repository setting that allows GitHub Actions to create pull requests must
+# also be enabled for the GITHUB_TOKEN-based PR step below.
+#
 # Run it manually any time from Actions -> Sync upstream -> Run workflow.
 
 on:
@@ -48,15 +52,36 @@ jobs:
           git remote add upstream https://github.com/ollama/ollama.git
           git fetch upstream main
           git checkout -B sync/upstream origin/main
+
           if git merge-base --is-ancestor upstream/main HEAD; then
             echo "No new upstream commits since the last sync."
             exit 0
           fi
-          git merge --no-edit upstream/main
-          # This repo rewrites README.md as its own project page; keep the version from main before the merge.
-          git checkout origin/main -- README.md
-          git add README.md
-          git commit --amend --no-edit
+
+          # Merge first, but keep repository-owned files exactly as they were on
+          # main. In particular, do not push upstream workflow changes with the
+          # GITHUB_TOKEN: GitHub App tokens need the Workflows permission to
+          # create or update files under .github/workflows.
+          merge_had_conflicts=false
+          if ! git merge --no-edit upstream/main; then
+            merge_had_conflicts=true
+          fi
+
+          git restore --source=origin/main --staged --worktree -- README.md .github/workflows
+
+          unresolved="$(git diff --name-only --diff-filter=U)"
+          if [ -n "$unresolved" ]; then
+            echo "::error::Upstream merge has conflicts outside repository-owned README/workflow files:"
+            printf '%s\n' "$unresolved"
+            exit 1
+          fi
+
+          if [ "$merge_had_conflicts" = "true" ]; then
+            git commit --no-edit
+          elif ! git diff --cached --quiet; then
+            git commit --amend --no-edit
+          fi
+
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Push sync branch
@@ -68,11 +93,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr create \
-            --base main --head sync/upstream \
-            --title "chore: sync upstream ollama/ollama" \
-            --body "Automatically merged the latest [ollama/ollama](https://github.com/ollama/ollama) main into this branch. The Windows build runs on this PR; if auto-merge is enabled it merges when the required check passes." \
-            || true
+          existing_pr="$(gh pr list --base main --head sync/upstream --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$existing_pr" ]; then
+            echo "Pull request #$existing_pr already exists; branch update is sufficient."
+          else
+            gh pr create \
+              --base main --head sync/upstream \
+              --title "chore: sync upstream ollama/ollama" \
+              --body "Automatically merged the latest [ollama/ollama](https://github.com/ollama/ollama) main into this branch. The Windows build runs on this PR; if auto-merge is enabled it merges when the required check passes."
+          fi
 
       - name: Enable auto-merge on the PR
         if: steps.merge.outputs.changed == 'true'
