@@ -5,8 +5,8 @@ name: sync-upstream
 # and (if auto-merge is enabled) merges it once the Windows build passes.
 #
 # Fork note: GitHub Actions must first be enabled in the fork's Actions tab.
-# The repository setting that allows GitHub Actions to create pull requests must
-# also be enabled for the GITHUB_TOKEN-based PR step below.
+# Creating pull requests from this fork is blocked for the ephemeral GITHUB_TOKEN,
+# so the PR steps use a fine-grained PAT stored as the SYNC_PR_TOKEN secret.
 #
 # Run it manually any time from Actions -> Sync upstream -> Run workflow.
 
@@ -91,8 +91,12 @@ jobs:
       - name: Open or update pull request
         if: steps.merge.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_PR_TOKEN }}
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Missing repository secret SYNC_PR_TOKEN. Create a fine-grained PAT with Contents: read/write and Pull requests: read/write for this repository, then add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
           existing_pr="$(gh pr list --base main --head sync/upstream --state open --json number --jq '.[0].number // empty')"
           if [ -n "$existing_pr" ]; then
             echo "Pull request #$existing_pr already exists; branch update is sufficient."
@@ -106,7 +110,7 @@ jobs:
       - name: Enable auto-merge on the PR
         if: steps.merge.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SYNC_PR_TOKEN }}
         run: |
           gh pr merge sync/upstream --auto --merge || \
             echo "Auto-merge is not enabled for this repo; review and merge the PR manually."
